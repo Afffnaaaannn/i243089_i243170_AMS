@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { UserProfile, PermissionCode } from '../types';
 import { api } from '../services/api';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
-import { AuthContext, CURRENT_USER_KEY } from './auth-context';
+import { AuthContext } from './auth-context';
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<UserProfile | null>(null);
@@ -22,17 +22,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               setIsLoading(false);
               return;
             }
-          }
-        }
-
-        // Check local saved session
-        const savedUserId = localStorage.getItem(CURRENT_USER_KEY);
-        if (savedUserId) {
-          const profile = await api.getUserById(savedUserId);
-          if (profile) {
-            setUser(profile);
-            setIsLoading(false);
-            return;
           }
         }
 
@@ -76,7 +65,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           const profile = await api.getUserById(data.user.id);
           if (profile) {
             setUser(profile);
-            localStorage.setItem(CURRENT_USER_KEY, profile.id);
             setIsLoading(false);
             return { success: true };
           }
@@ -90,33 +78,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return { success: false, error: 'Invalid username/email or password.' };
       }
 
-      // Offline mode uses only accounts created through the registration form.
-      const allUsers = await api.getUsers();
-      const matched = allUsers.find(
-        (u) => u.email.toLowerCase() === cleanInput || u.username.toLowerCase() === cleanInput
-      );
-
-      if (!matched) {
-        setIsLoading(false);
-        return { success: false, error: 'Invalid username/email or password.' };
-      }
-
-      // Basic password validation for demo: non-empty
-      if (!password) {
-        setIsLoading(false);
-        return { success: false, error: 'Password is required.' };
-      }
-
-      const fullProfile = await api.getUserById(matched.id);
-      if (fullProfile) {
-        setUser(fullProfile);
-        localStorage.setItem(CURRENT_USER_KEY, fullProfile.id);
-        setIsLoading(false);
-        return { success: true };
-      }
-
       setIsLoading(false);
-      return { success: false, error: 'User profile could not be loaded.' };
+      return { success: false, error: 'Supabase is not configured. Configure the application before signing in.' };
     } catch (err: any) {
       setIsLoading(false);
       return { success: false, error: err.message || 'Login failed due to unexpected error.' };
@@ -149,18 +112,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
         if (profile) {
           setUser(profile);
-          localStorage.setItem(CURRENT_USER_KEY, profile.id);
           return { success: true };
         }
         return { success: false, error: 'Account created, but its profile could not be loaded.' };
       }
 
-      const existing = (await api.getUsers()).some(user => user.email === cleanEmail || user.username === cleanUsername);
-      if (existing) return { success: false, error: 'That email or username is already in use.' };
-      const profile = await api.createLocalUser({ username: cleanUsername, full_name: fullName.trim(), email: cleanEmail });
-      setUser(profile);
-      localStorage.setItem(CURRENT_USER_KEY, profile.id);
-      return { success: true };
+      return { success: false, error: 'Supabase is not configured. Configure the application before registering.' };
     } catch (err: any) {
       return { success: false, error: err.message || 'Registration failed.' };
     } finally {
@@ -173,7 +130,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (isSupabaseConfigured) {
       await supabase.auth.signOut();
     }
-    localStorage.removeItem(CURRENT_USER_KEY);
     setUser(null);
     setIsLoading(false);
   };

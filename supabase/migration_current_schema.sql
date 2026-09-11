@@ -68,6 +68,15 @@ CREATE POLICY profiles_select_own
     ON public.profiles FOR SELECT TO authenticated
     USING (id = auth.uid());
 
+DROP POLICY IF EXISTS profiles_select_admin ON public.profiles;
+CREATE POLICY profiles_select_admin
+    ON public.profiles FOR SELECT TO authenticated
+    USING (EXISTS (
+        SELECT 1 FROM public.profiles AS actor
+        WHERE actor.id = auth.uid()
+          AND actor.role IN ('IT_ADMIN', 'UNIVERSITY_ADMIN')
+    ));
+
 DROP POLICY IF EXISTS profiles_insert_own ON public.profiles;
 CREATE POLICY profiles_insert_own
     ON public.profiles FOR INSERT TO authenticated
@@ -111,3 +120,144 @@ CREATE POLICY user_permissions_manage_admin
         WHERE actor.id = auth.uid()
           AND actor.role IN ('IT_ADMIN', 'UNIVERSITY_ADMIN')
     ));
+
+-- Inventory and workflow data. The application uses these tables as its only
+-- operational data store; localStorage is not used for business records.
+CREATE TABLE IF NOT EXISTS public.universities (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    code TEXT NOT NULL UNIQUE
+);
+
+CREATE TABLE IF NOT EXISTS public.faculties (
+    id TEXT PRIMARY KEY,
+    university_id TEXT NOT NULL REFERENCES public.universities(id),
+    name TEXT NOT NULL,
+    code TEXT NOT NULL UNIQUE
+);
+
+CREATE TABLE IF NOT EXISTS public.departments (
+    id TEXT PRIMARY KEY,
+    faculty_id TEXT NOT NULL REFERENCES public.faculties(id),
+    name TEXT NOT NULL,
+    code TEXT NOT NULL UNIQUE
+);
+
+CREATE TABLE IF NOT EXISTS public.roles (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL,
+    default_level INTEGER NOT NULL CHECK (default_level BETWEEN 0 AND 3)
+);
+
+CREATE TABLE IF NOT EXISTS public.locations (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    building TEXT NOT NULL,
+    room TEXT NOT NULL,
+    department_id TEXT NOT NULL REFERENCES public.departments(id),
+    exception_request_id TEXT,
+    created_by UUID REFERENCES auth.users(id),
+    is_active BOOLEAN NOT NULL DEFAULT true,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS public.assets (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    category TEXT NOT NULL,
+    department_id TEXT NOT NULL REFERENCES public.departments(id),
+    faculty_id TEXT NOT NULL REFERENCES public.faculties(id),
+    university_id TEXT NOT NULL REFERENCES public.universities(id),
+    location_id TEXT NOT NULL REFERENCES public.locations(id),
+    condition TEXT NOT NULL,
+    status TEXT NOT NULL,
+    created_by UUID REFERENCES auth.users(id),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS public.requests (
+    id TEXT PRIMARY KEY,
+    request_number TEXT NOT NULL UNIQUE,
+    request_type TEXT NOT NULL,
+    form_type TEXT NOT NULL,
+    user_id UUID NOT NULL REFERENCES auth.users(id),
+    asset_id TEXT REFERENCES public.assets(id),
+    location_id TEXT REFERENCES public.locations(id),
+    start_date TIMESTAMPTZ NOT NULL,
+    end_date TIMESTAMPTZ NOT NULL,
+    purpose TEXT NOT NULL,
+    special_justification TEXT,
+    status TEXT NOT NULL,
+    department_id TEXT REFERENCES public.departments(id),
+    faculty_id TEXT REFERENCES public.faculties(id),
+    university_id TEXT REFERENCES public.universities(id),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS public.transfers (
+    id TEXT PRIMARY KEY,
+    transfer_number TEXT NOT NULL UNIQUE,
+    asset_id UUID NOT NULL REFERENCES public.assets(id),
+    source_department_id TEXT NOT NULL REFERENCES public.departments(id),
+    destination_department_id TEXT NOT NULL REFERENCES public.departments(id),
+    destination_faculty_id TEXT NOT NULL REFERENCES public.faculties(id),
+    destination_university_id TEXT NOT NULL REFERENCES public.universities(id),
+    destination_location_id UUID REFERENCES public.locations(id),
+    transfer_type TEXT NOT NULL,
+    status TEXT NOT NULL,
+    requested_by UUID NOT NULL REFERENCES auth.users(id),
+    notes TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+INSERT INTO public.universities (id, name, code) VALUES
+    ('univ-1', 'Central State University', 'CSU'),
+    ('univ-ext', 'External Partner University', 'EPU')
+ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO public.faculties (id, university_id, name, code) VALUES
+    ('fac-fet', 'univ-1', 'Faculty of Engineering & Technology', 'FET'),
+    ('fac-fos', 'univ-1', 'Faculty of Science', 'FOS'),
+    ('fac-ext', 'univ-ext', 'External Faculty of Medicine', 'EFM')
+ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO public.departments (id, faculty_id, name, code) VALUES
+    ('dept-cse', 'fac-fet', 'Computer Science & Engineering', 'CSE'),
+    ('dept-ee', 'fac-fet', 'Electrical & Electronic Engineering', 'EE'),
+    ('dept-phys', 'fac-fos', 'Department of Physics', 'PHYS'),
+    ('dept-chem', 'fac-fos', 'Department of Chemistry', 'CHEM'),
+    ('dept-ext', 'fac-ext', 'External Medical Research', 'EXT')
+ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO public.roles (id, name, description, default_level) VALUES
+    ('IT_GROUP_MEMBER', 'IT Group Member', 'Technical specialist for infrastructure and authorized location creation.', 2),
+    ('DEPARTMENT_ADMIN', 'Department Administrator (DA)', 'Department-level asset manager and first-tier transfer approver.', 1),
+    ('FACULTY_ADMIN', 'Faculty Administrator / Dean', 'Faculty-level manager and cross-department transfer approver.', 2),
+    ('UNIVERSITY_ADMIN', 'University Administrator', 'Central campus governance, policy, and cross-faculty approver.', 3),
+    ('STANDARD_USER', 'Standard User (Level 0)', 'Student or basic staff member.', 0),
+    ('RESEARCH_STAFF', 'Senior Researcher (Level 1)', 'Academic and research personnel.', 1)
+ON CONFLICT (id) DO NOTHING;
+
+ALTER TABLE public.universities ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.faculties ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.departments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.roles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.locations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.assets ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.requests ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.transfers ENABLE ROW LEVEL SECURITY;
+
+DO $$
+DECLARE
+    table_name TEXT;
+BEGIN
+    FOREACH table_name IN ARRAY ARRAY['universities', 'faculties', 'departments', 'roles', 'locations', 'assets', 'requests', 'transfers'] LOOP
+        EXECUTE format('DROP POLICY IF EXISTS authenticated_full_access ON public.%I', table_name);
+        EXECUTE format('CREATE POLICY authenticated_full_access ON public.%I FOR ALL TO authenticated USING (true) WITH CHECK (true)', table_name);
+    END LOOP;
+END $$;
