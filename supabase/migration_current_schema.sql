@@ -63,6 +63,23 @@ ALTER TABLE public.user_permissions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.permissions ENABLE ROW LEVEL SECURITY;
 
+CREATE OR REPLACE FUNCTION public.is_admin()
+RETURNS BOOLEAN
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+    SELECT EXISTS (
+        SELECT 1
+        FROM public.profiles
+        WHERE id = auth.uid()
+          AND role IN ('IT_ADMIN', 'UNIVERSITY_ADMIN')
+    );
+$$;
+
+REVOKE ALL ON FUNCTION public.is_admin() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.is_admin() TO authenticated;
+
 DROP POLICY IF EXISTS profiles_select_own ON public.profiles;
 CREATE POLICY profiles_select_own
     ON public.profiles FOR SELECT TO authenticated
@@ -71,11 +88,7 @@ CREATE POLICY profiles_select_own
 DROP POLICY IF EXISTS profiles_select_admin ON public.profiles;
 CREATE POLICY profiles_select_admin
     ON public.profiles FOR SELECT TO authenticated
-    USING (EXISTS (
-        SELECT 1 FROM public.profiles AS actor
-        WHERE actor.id = auth.uid()
-          AND actor.role IN ('IT_ADMIN', 'UNIVERSITY_ADMIN')
-    ));
+    USING (public.is_admin());
 
 DROP POLICY IF EXISTS profiles_insert_own ON public.profiles;
 CREATE POLICY profiles_insert_own
@@ -85,11 +98,7 @@ CREATE POLICY profiles_insert_own
 DROP POLICY IF EXISTS profiles_update_admin ON public.profiles;
 CREATE POLICY profiles_update_admin
     ON public.profiles FOR UPDATE TO authenticated
-    USING (EXISTS (
-        SELECT 1 FROM public.profiles AS actor
-        WHERE actor.id = auth.uid()
-          AND actor.role IN ('IT_ADMIN', 'UNIVERSITY_ADMIN')
-    ))
+    USING (public.is_admin())
     WITH CHECK (true);
 
 DROP POLICY IF EXISTS permissions_read_authenticated ON public.permissions;
